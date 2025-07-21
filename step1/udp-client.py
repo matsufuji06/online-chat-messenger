@@ -1,6 +1,5 @@
 import socket
 import threading
-import os
 import sys
 
 SERVER_HOST = '127.0.0.1' # サーバーのIPアドレス
@@ -14,7 +13,8 @@ def receive_messages(sock):
         try:
             data, _ = sock.recvfrom(MAX_MESSAGE_SIZE)
             message = data.decode('utf-8')
-            # 受信したメッセージを新しい行で表示し、現在の入力行を上書きしないようにする
+
+            # 受信したメッセージを表示する
             sys.stdout.write(f"\r{message}\n{current_prompt}")
             sys.stdout.flush()
         except OSError:
@@ -24,12 +24,16 @@ def receive_messages(sock):
             print(f"メッセージ受信中にエラーが発生しました: {e}")
             break
 
-current_prompt = "" # 現在のプロンプトを保持するためのグローバル変数
+current_prompt = "" # 現在のメッセージを保持するためのグローバル変数
 
 def start_client():
     """UDPクライアントを起動し、メッセージの送受信を行う"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(0.1) # 非ブロッキング受信のために短いタイムアウトを設定
+
+    # ★任意のポートでソケットをバインドする（IPはどれでもOK、ポート番号はOSに任せる）
+    # → サーバーから他のクライアントにリレーするため
+    sock.bind(('', 0))
+    # sock.settimeout(0.1) # 非ブロッキング受信のために短いタイムアウトを設定
 
     username = ""
     while not username:
@@ -47,16 +51,20 @@ def start_client():
     receive_thread = threading.Thread(target=receive_messages, args=(sock,), daemon=True)
     receive_thread.start()
 
+    # JOINメッセージを他のクライアントに送る（サーバー側でリレーする）
+    join_message = f"{username} がチャットに参加しました".encode('utf-8')
+    sock.sendto(bytearray([len(username.encode())]) + username.encode() + b'[JOIN] ' + join_message, (SERVER_HOST, SERVER_PORT))
+
     try:
         while True:
             global current_prompt
             current_prompt = f"{username}> "
             message = input(current_prompt)
 
+            # exitの場合、終了する
             if message.lower() == "exit":
                 break
 
-            # ユーザー名の長さを最初の1バイトにエンコード
             username_bytes = username.encode('utf-8')
             usernamelen = len(username_bytes)
 
@@ -72,12 +80,11 @@ def start_client():
                 print(f"エラー: メッセージが最大サイズ {MAX_MESSAGE_SIZE} バイトを超えています。({total_message_size}バイト)")
                 continue
 
-            # プロトコルに従ってバイトデータを構築
             # bytearrayを使用して可変長のバイトデータを作成
             send_data = bytearray()
-            send_data.append(usernamelen) # ユーザー名の長さを1バイトで追加
-            send_data.extend(username_bytes) # ユーザー名バイトを追加
-            send_data.extend(message_bytes) # メッセージバイトを追加
+            send_data.append(usernamelen)
+            send_data.extend(username_bytes)
+            send_data.extend(message_bytes)
 
             sock.sendto(send_data, (SERVER_HOST, SERVER_PORT))
 
@@ -86,7 +93,7 @@ def start_client():
     finally:
         sock.close()
         print("ソケットが閉じられました。")
-        sys.exit(0) # クリーンに終了
+        sys.exit(0)
 
 if __name__ == "__main__":
     start_client()
